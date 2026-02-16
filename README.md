@@ -19,14 +19,7 @@ Quick demo (auto-playing GIF inside the repository):
 
 ## Installation
 
-### Option 1: Install with Homebrew
-
-```bash
-brew tap mrtuuro/go-switcher
-brew install go-switcher
-```
-
-### Option 2: Install without Go (release script)
+### Option 1: Install without Go (release script)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mrtuuro/go-switcher/main/scripts/install.sh | sh
@@ -41,18 +34,18 @@ Pin a specific version if needed:
 curl -fsSL https://raw.githubusercontent.com/mrtuuro/go-switcher/main/scripts/install.sh | SWITCHER_VERSION=v0.1.0 sh
 ```
 
-### Option 3: Install with `go install`
+### Option 2: Install with `go install`
 
 ```bash
 go install github.com/mrtuuro/go-switcher/cmd/switcher@latest
 ```
 
-### Option 4: Download a release binary manually
+### Option 3: Download a release binary manually
 
 Download the archive for your OS/arch from GitHub Releases, then place the
 `switcher` binary in a directory on your `PATH`.
 
-### Option 5: Build from source
+### Option 4: Build from source
 
 Building from source requires Go 1.23+ because of Charm dependencies.
 `make` targets use `GOTOOLCHAIN=auto`, so Go 1.21+ can auto-download a newer
@@ -152,9 +145,6 @@ make test-one PKG=./internal/switcher TEST='^TestResolveActiveVersion_LocalTakes
 - Push commits to `main`.
 - Create and push a semver tag (for example `v0.1.0`).
 - GitHub Actions publishes release archives for macOS and Linux.
-- GoReleaser updates Homebrew formula in `mrtuuro/homebrew-go-switcher`.
-- If branch protection requires pull requests on the tap repo, GoReleaser opens
-  a PR with the formula update.
 
 ```bash
 git tag v0.1.0
