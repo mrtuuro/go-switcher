@@ -13,13 +13,9 @@ It installs official Go releases, supports global and project-local version sele
 
 ## Demo
 
-Quick demo video:
+Quick demo (auto-playing GIF inside the repository):
 
-- [Watch demo (`go-switcher-demo.mov`)](./assets/go-switcher-demo.mov)
-
-If your Markdown viewer supports inline HTML video, this also works:
-
-<video src="./assets/go-switcher-demo.mov" controls muted playsinline width="860"></video>
+![go-switcher demo](./assets/go-switcher-demo.gif)
 
 ## Installation
 
