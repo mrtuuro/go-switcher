@@ -48,8 +48,14 @@ brews:
     repository:
       owner: mrtuuro
       name: homebrew-go-switcher
-      branch: main
+      branch: goreleaser-{{ .Tag }}
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+      pull_request:
+        enabled: true
+        base:
+          owner: mrtuuro
+          name: homebrew-go-switcher
+          branch: main
     directory: Formula
     homepage: https://github.com/mrtuuro/go-switcher
     description: Switch and install Go toolchains with local/global scope and TUI

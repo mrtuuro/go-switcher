@@ -151,6 +151,8 @@ make test-one PKG=./internal/switcher TEST='^TestResolveActiveVersion_LocalTakes
 - Create and push a semver tag (for example `v0.1.0`).
 - GitHub Actions publishes release archives for macOS and Linux.
 - GoReleaser updates Homebrew formula in `mrtuuro/homebrew-go-switcher`.
+- If branch protection requires pull requests on the tap repo, GoReleaser opens
+  a PR with the formula update.
 
 ```bash
 git tag v0.1.0
