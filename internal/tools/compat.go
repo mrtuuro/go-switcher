@@ -15,8 +15,8 @@ type compatibilityRule struct {
 var compatibilityRules = []compatibilityRule{
 	{MinGo: "go1.0.0", MaxGo: "go1.20.99", LintVersion: "v1.54.2"},
 	{MinGo: "go1.21.0", MaxGo: "go1.22.99", LintVersion: "v1.57.2"},
-	{MinGo: "go1.23.0", MaxGo: "go1.24.99", LintVersion: "v1.60.3"},
-	{MinGo: "go1.25.0", MaxGo: "", LintVersion: "v1.61.0"},
+	{MinGo: "go1.23.0", MaxGo: "go1.24.99", LintVersion: "v1.64.8"},
+	{MinGo: "go1.25.0", MaxGo: "", LintVersion: "v2.9.0"},
 }
 
 func RecommendedGolangCILint(goVersion string) string {

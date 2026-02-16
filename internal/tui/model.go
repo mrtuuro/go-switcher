@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
@@ -39,6 +40,9 @@ type model struct {
 	listOffset int
 	width      int
 	height     int
+
+	searchQuery  string
+	searchActive bool
 
 	localVersions  []string
 	remoteVersions []string
@@ -276,6 +280,10 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if updated, handled := m.handleSearchKey(msg); handled {
+		return updated, nil
+	}
+
 	current := m.currentList()
 
 	switch key {
@@ -327,6 +335,9 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.status = "Local versions"
 		}
 		m.ensureCursorVisible()
+		if m.searchQuery != "" {
+			m.status = m.searchStatusText()
+		}
 	case "s":
 		if m.scope == switcher.ScopeGlobal {
 			m.scope = switcher.ScopeLocal
@@ -374,6 +385,98 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m model) handleSearchKey(msg tea.KeyMsg) (model, bool) {
+	key := msg.String()
+
+	if m.searchActive {
+		switch key {
+		case "esc":
+			m.searchActive = false
+			m.searchQuery = ""
+			m.cursor = 0
+			m.listOffset = 0
+			m.ensureCursorVisible()
+			m.status = "Search cleared"
+			return m, true
+		case "enter":
+			m.searchActive = false
+			m.status = m.searchStatusText()
+			return m, true
+		case "backspace", "ctrl+h":
+			if m.searchQuery == "" {
+				m.searchActive = false
+				m.status = "Search cleared"
+				return m, true
+			}
+
+			_, size := utf8.DecodeLastRuneInString(m.searchQuery)
+			if size > 0 {
+				m.searchQuery = m.searchQuery[:len(m.searchQuery)-size]
+			}
+			m.cursor = 0
+			m.listOffset = 0
+			m.ensureCursorVisible()
+			m.status = m.searchStatusText()
+			return m, true
+		case "ctrl+u":
+			m.searchQuery = ""
+			m.cursor = 0
+			m.listOffset = 0
+			m.ensureCursorVisible()
+			m.status = "Search cleared"
+			return m, true
+		}
+
+		if len(msg.Runes) > 0 && msg.Type == tea.KeyRunes {
+			m.searchQuery += string(msg.Runes)
+			m.cursor = 0
+			m.listOffset = 0
+			m.ensureCursorVisible()
+			m.status = m.searchStatusText()
+			return m, true
+		}
+
+		return m, false
+	}
+
+	switch key {
+	case "/":
+		m.searchActive = true
+		if m.searchQuery == "" {
+			m.status = "Search mode: type to filter versions, Enter to apply, Esc to clear"
+		} else {
+			m.status = m.searchStatusText()
+		}
+		return m, true
+	case "esc":
+		if m.searchQuery == "" {
+			return m, false
+		}
+		m.searchQuery = ""
+		m.cursor = 0
+		m.listOffset = 0
+		m.ensureCursorVisible()
+		m.status = "Search cleared"
+		return m, true
+	default:
+		return m, false
+	}
+}
+
+func (m model) searchStatusText() string {
+	if m.searchQuery == "" {
+		return "Search cleared"
+	}
+
+	matches := len(m.currentList())
+	unit := "matches"
+	if matches == 1 {
+		unit = "match"
+	}
+
+	return fmt.Sprintf("Search %q: %d %s", m.searchQuery, matches, unit)
 }
 
 func (m model) loadLocalCmd() tea.Cmd {
@@ -540,6 +643,23 @@ func (m model) waitAsyncCmd() tea.Cmd {
 }
 
 func (m model) currentList() []string {
+	list := m.unfilteredList()
+	if strings.TrimSpace(m.searchQuery) == "" {
+		return list
+	}
+
+	query := strings.ToLower(strings.TrimSpace(m.searchQuery))
+	filtered := make([]string, 0, len(list))
+	for _, version := range list {
+		if strings.Contains(strings.ToLower(version), query) {
+			filtered = append(filtered, version)
+		}
+	}
+
+	return filtered
+}
+
+func (m model) unfilteredList() []string {
 	if m.mode == modeRemote {
 		return m.remoteVersions
 	}
@@ -561,7 +681,7 @@ func (m model) View() string {
 
 	header := titleStyle.Render("Go Switcher")
 	header += "\n"
-	header += subtleStyle.Render("Tab: local/remote  Enter: use  i: install(remote)  X: delete(local)  s: scope  r: refresh  j/k or arrows: move  PgUp/PgDn: jump  q: quit")
+	header += subtleStyle.Render("Tab: local/remote  /:search  Enter: use  i:install(remote)  X:delete(local)  s:scope  r:refresh  Esc:clear search  q:quit")
 
 	active := "none"
 	if m.activeVersion != "" {
@@ -572,9 +692,25 @@ func (m model) View() string {
 		meta += "\n" + subtleStyle.Render("Local override is active; switching global will not change effective active version here")
 	}
 
+	if m.searchQuery != "" || m.searchActive {
+		rawCount := len(m.unfilteredList())
+		filteredCount := len(m.currentList())
+		searchLine := fmt.Sprintf("Search: %q (%d/%d)", m.searchQuery, filteredCount, rawCount)
+		if m.searchActive {
+			searchLine += " [typing]"
+		}
+		meta += "\n" + subtleStyle.Render(searchLine)
+	} else {
+		meta += "\n" + subtleStyle.Render("Press / to search versions")
+	}
+
 	list := m.currentList()
 	if len(list) == 0 {
-		list = []string{"<empty>"}
+		if m.searchQuery != "" {
+			list = []string{"<no matches>"}
+		} else {
+			list = []string{"<empty>"}
+		}
 	}
 
 	pageSize := m.pageSize()

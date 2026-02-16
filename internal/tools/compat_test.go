@@ -11,8 +11,9 @@ func TestRecommendedGolangCILint(t *testing.T) {
 	}{
 		{goVersion: "go1.20.10", want: "v1.54.2"},
 		{goVersion: "go1.21.8", want: "v1.57.2"},
-		{goVersion: "go1.24.1", want: "v1.60.3"},
-		{goVersion: "go1.25.0", want: "v1.61.0"},
+		{goVersion: "go1.24.1", want: "v1.64.8"},
+		{goVersion: "go1.25.0", want: "v2.9.0"},
+		{goVersion: "go1.26.3", want: "v2.9.0"},
 	}
 
 	for _, tc := range tests {

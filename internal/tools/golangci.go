@@ -15,6 +15,7 @@ import (
 
 	"github.com/mrtuuro/go-switcher/internal/progress"
 	"github.com/mrtuuro/go-switcher/internal/switcher"
+	"github.com/mrtuuro/go-switcher/internal/versionutil"
 )
 
 type EnsureOptions struct {
@@ -35,10 +36,18 @@ func EnsureForGoVersionWithOptions(ctx context.Context, paths switcher.Paths, cf
 		cfg.GolangCILintByGo = map[string]string{}
 	}
 
-	lintVersion := cfg.GolangCILintByGo[goVersion]
-	if strings.TrimSpace(lintVersion) == "" {
-		lintVersion = RecommendedGolangCILint(goVersion)
+	recommended := RecommendedGolangCILint(goVersion)
+	lintVersion := strings.TrimSpace(cfg.GolangCILintByGo[goVersion])
+	if lintVersion == "" {
+		lintVersion = recommended
 		cfg.GolangCILintByGo[goVersion] = lintVersion
+	} else {
+		cmp, err := versionutil.CompareDottedVersions(lintVersion, recommended)
+		if err != nil || cmp < 0 {
+			progress.Emit(opts.Reporter, "lint-install", fmt.Sprintf("Upgrading golangci-lint mapping from %s to %s for %s", lintVersion, recommended, goVersion), 0, 0)
+			lintVersion = recommended
+			cfg.GolangCILintByGo[goVersion] = lintVersion
+		}
 	}
 
 	binaryPath := GolangCILintBinaryPath(paths, lintVersion)

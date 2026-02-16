@@ -109,6 +109,8 @@ switcher tui
 ### TUI controls
 
 - `Tab`: switch between local and remote lists
+- `/`: start version search filter
+- `Esc`: clear search filter
 - `Enter`: use selected version
 - `i`: install selected remote version
 - `X`: delete selected local installed version
