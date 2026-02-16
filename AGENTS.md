@@ -47,6 +47,8 @@ If the codebase changes, update this file to match reality.
 
 Source build needs Go 1.23+ (Charm dependencies). `make` uses `GOTOOLCHAIN=auto`.
 
+Release tags also update Homebrew tap formula in `mrtuuro/homebrew-go-switcher`.
+
 ## Test Commands
 
 - Full test suite: `make test`

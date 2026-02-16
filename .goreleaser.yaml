@@ -42,3 +42,25 @@ release:
   github:
     owner: mrtuuro
     name: go-switcher
+
+brews:
+  - name: go-switcher
+    repository:
+      owner: mrtuuro
+      name: homebrew-go-switcher
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Formula
+    homepage: https://github.com/mrtuuro/go-switcher
+    description: Switch and install Go toolchains with local/global scope and TUI
+    license: MIT
+    commit_author:
+      name: go-switcher-bot
+      email: 183410257+mrtuuro@users.noreply.github.com
+    install: |
+      bin.install "switcher"
+    test: |
+      system "#{bin}/switcher", "help"
+    caveats: |
+      Add switcher shim directory to PATH for go/gofmt/golangci-lint routing:
+        export PATH="$HOME/.switcher/bin:$PATH"
