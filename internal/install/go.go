@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mrtuuro/go-switcher/internal/progress"
 	"github.com/mrtuuro/go-switcher/internal/releases"
 	"github.com/mrtuuro/go-switcher/internal/switcher"
 	"github.com/mrtuuro/go-switcher/internal/versionutil"
@@ -21,11 +22,21 @@ import (
 
 const goDownloadBaseURL = "https://go.dev/dl"
 
+type InstallOptions struct {
+	Reporter progress.Reporter
+}
+
 func InstallGoArchive(ctx context.Context, paths switcher.Paths, version string, archive releases.File) error {
+	return InstallGoArchiveWithOptions(ctx, paths, version, archive, InstallOptions{})
+}
+
+func InstallGoArchiveWithOptions(ctx context.Context, paths switcher.Paths, version string, archive releases.File, opts InstallOptions) error {
 	normalized, err := versionutil.NormalizeGoVersion(version)
 	if err != nil {
 		return err
 	}
+
+	progress.Emit(opts.Reporter, "go-install", fmt.Sprintf("Preparing installation for %s", normalized), 0, 0)
 
 	if err := switcher.EnsureLayout(paths); err != nil {
 		return err
@@ -33,15 +44,17 @@ func InstallGoArchive(ctx context.Context, paths switcher.Paths, version string,
 
 	targetDir := switcher.ToolchainDir(paths, normalized)
 	if _, err := os.Stat(filepath.Join(targetDir, "bin", "go")); err == nil {
+		progress.Emit(opts.Reporter, "go-install", fmt.Sprintf("%s is already installed", normalized), 0, 0)
 		return nil
 	}
 
 	cachePath := filepath.Join(paths.CacheDir, archive.Filename)
-	if err := ensureArchiveInCache(ctx, archive, cachePath); err != nil {
+	if err := ensureArchiveInCache(ctx, archive, cachePath, opts.Reporter); err != nil {
 		return err
 	}
 
 	if strings.TrimSpace(archive.SHA256) != "" {
+		progress.Emit(opts.Reporter, "go-checksum", fmt.Sprintf("Verifying checksum for %s", archive.Filename), 0, 0)
 		ok, err := verifySHA256(cachePath, archive.SHA256)
 		if err != nil {
 			return fmt.Errorf("verify checksum for %s: %w", archive.Filename, err)
@@ -51,6 +64,7 @@ func InstallGoArchive(ctx context.Context, paths switcher.Paths, version string,
 		}
 	}
 
+	progress.Emit(opts.Reporter, "go-extract", fmt.Sprintf("Extracting %s", archive.Filename), 0, 0)
 	if err := extractGoArchive(cachePath, targetDir); err != nil {
 		return err
 	}
@@ -59,16 +73,20 @@ func InstallGoArchive(ctx context.Context, paths switcher.Paths, version string,
 		return fmt.Errorf("installed toolchain %s is missing bin/go", normalized)
 	}
 
+	progress.Emit(opts.Reporter, "go-install", fmt.Sprintf("Installed %s", normalized), 0, 0)
+
 	return nil
 }
 
-func ensureArchiveInCache(ctx context.Context, archive releases.File, cachePath string) error {
+func ensureArchiveInCache(ctx context.Context, archive releases.File, cachePath string, reporter progress.Reporter) error {
 	if _, err := os.Stat(cachePath); err == nil {
 		if strings.TrimSpace(archive.SHA256) == "" {
+			progress.Emit(reporter, "go-download", fmt.Sprintf("Using cached archive %s", archive.Filename), 0, 0)
 			return nil
 		}
 		ok, verifyErr := verifySHA256(cachePath, archive.SHA256)
 		if verifyErr == nil && ok {
+			progress.Emit(reporter, "go-download", fmt.Sprintf("Using cached archive %s", archive.Filename), 0, 0)
 			return nil
 		}
 		if removeErr := os.Remove(cachePath); removeErr != nil && !os.IsNotExist(removeErr) {
@@ -77,14 +95,14 @@ func ensureArchiveInCache(ctx context.Context, archive releases.File, cachePath 
 	}
 
 	url := fmt.Sprintf("%s/%s", goDownloadBaseURL, archive.Filename)
-	if err := downloadToFile(ctx, url, cachePath); err != nil {
+	if err := downloadToFile(ctx, url, cachePath, reporter, "go-download", archive.Filename); err != nil {
 		return fmt.Errorf("download %s: %w", archive.Filename, err)
 	}
 
 	return nil
 }
 
-func downloadToFile(ctx context.Context, url string, destination string) error {
+func downloadToFile(ctx context.Context, url string, destination string, reporter progress.Reporter, stage string, label string) error {
 	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
 		return fmt.Errorf("create destination parent: %w", err)
 	}
@@ -121,10 +139,21 @@ func downloadToFile(ctx context.Context, url string, destination string) error {
 		return fmt.Errorf("unexpected status code %d", resp.StatusCode)
 	}
 
-	if _, err := io.Copy(tmpFile, resp.Body); err != nil {
+	total := resp.ContentLength
+	progress.Emit(reporter, stage, fmt.Sprintf("Downloading %s", label), 0, total)
+
+	progressWriter := &downloadProgressWriter{
+		reporter: reporter,
+		stage:    stage,
+		label:    label,
+		total:    total,
+	}
+
+	if _, err := io.Copy(tmpFile, io.TeeReader(resp.Body, progressWriter)); err != nil {
 		cleanup()
 		return fmt.Errorf("write response body: %w", err)
 	}
+	progressWriter.emit(true)
 
 	if err := tmpFile.Close(); err != nil {
 		cleanup()
@@ -137,6 +166,34 @@ func downloadToFile(ctx context.Context, url string, destination string) error {
 	}
 
 	return nil
+}
+
+type downloadProgressWriter struct {
+	reporter progress.Reporter
+	stage    string
+	label    string
+	total    int64
+	current  int64
+	lastEmit time.Time
+}
+
+func (w *downloadProgressWriter) Write(p []byte) (int, error) {
+	w.current += int64(len(p))
+	w.emit(false)
+	return len(p), nil
+}
+
+func (w *downloadProgressWriter) emit(force bool) {
+	if w.reporter == nil {
+		return
+	}
+	if !force && time.Since(w.lastEmit) < 250*time.Millisecond {
+		return
+	}
+
+	transfer := progress.FormatTransfer(w.current, w.total)
+	progress.Emit(w.reporter, w.stage, fmt.Sprintf("Downloading %s %s", w.label, transfer), w.current, w.total)
+	w.lastEmit = time.Now()
 }
 
 func verifySHA256(filePath string, expectedHex string) (bool, error) {

@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mrtuuro/go-switcher/internal/progress"
 	"github.com/mrtuuro/go-switcher/internal/switcher"
 )
 
@@ -15,8 +16,9 @@ type Service interface {
 	ListLocal() ([]string, error)
 	ListRemote(context.Context) ([]string, error)
 	Current(cwd string) (switcher.ActiveVersion, error)
-	Install(context.Context, string) (string, error)
-	Use(context.Context, string, switcher.Scope, string) (string, string, error)
+	InstallWithProgress(context.Context, string, progress.Reporter) (string, error)
+	UseWithProgress(context.Context, string, switcher.Scope, string, progress.Reporter) (string, string, error)
+	DeleteInstalledWithProgress(context.Context, string, string, progress.Reporter) (switcher.DeleteResult, error)
 }
 
 type listMode int
@@ -48,6 +50,8 @@ type model struct {
 	lastError    string
 	spinner      spinner.Model
 	hasRemoteHit bool
+	progressCh   <-chan progress.Event
+	doneCh       <-chan tea.Msg
 
 	scopeInitialized bool
 }
@@ -74,6 +78,17 @@ type useDoneMsg struct {
 	lintVersion string
 	active      switcher.ActiveVersion
 	err         error
+}
+
+type progressMsg struct {
+	event progress.Event
+}
+
+type asyncClosedMsg struct{}
+
+type deleteDoneMsg struct {
+	result switcher.DeleteResult
+	err    error
 }
 
 func Run(ctx context.Context, svc Service, cwd string) error {
@@ -126,6 +141,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.spinner, cmd = m.spinner.Update(msg)
 			cmds = append(cmds, cmd)
 		}
+	case progressMsg:
+		if typed.event.Message != "" {
+			m.status = typed.event.Message
+		}
+		m.lastError = ""
+		if m.doneCh != nil || m.progressCh != nil {
+			cmds = append(cmds, m.waitAsyncCmd())
+		}
+	case asyncClosedMsg:
+		m.busy = false
+		m.progressCh = nil
+		m.doneCh = nil
 	case versionsMsg:
 		m.busy = false
 		if typed.err != nil {
@@ -162,9 +189,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lastError = ""
 	case currentMsg:
 		if typed.err != nil {
-			if typed.err != switcher.ErrNoActiveVersion {
-				m.lastError = typed.err.Error()
+			if typed.err == switcher.ErrNoActiveVersion {
+				m.activeVersion = ""
+				m.activeScope = switcher.ScopeGlobal
+				return m, tea.Batch(cmds...)
 			}
+			m.lastError = typed.err.Error()
 			return m, tea.Batch(cmds...)
 		}
 		if !m.scopeInitialized {
@@ -175,6 +205,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.activeScope = typed.scope
 	case installDoneMsg:
 		m.busy = false
+		m.progressCh = nil
+		m.doneCh = nil
 		if typed.err != nil {
 			m.lastError = typed.err.Error()
 			m.status = "Install failed"
@@ -188,6 +220,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case useDoneMsg:
 		m.busy = false
+		m.progressCh = nil
+		m.doneCh = nil
 		if typed.err != nil {
 			m.lastError = typed.err.Error()
 			m.status = "Switch failed"
@@ -201,10 +235,32 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.status = fmt.Sprintf("Set %s scope to %s; effective active is %s (%s)", m.scope, typed.version, typed.active.Version, typed.active.Scope)
 		}
-	}
+	case deleteDoneMsg:
+		m.busy = false
+		m.progressCh = nil
+		m.doneCh = nil
+		if typed.err != nil {
+			m.lastError = typed.err.Error()
+			m.status = "Delete failed"
+			return m, tea.Batch(cmds...)
+		}
 
-	if m.busy {
-		cmds = append(cmds, m.spinner.Tick)
+		m.lastError = ""
+		result := typed.result
+		switch {
+		case result.WasActive && result.SwitchedToNewest && result.ActiveAfter.Version != "":
+			m.status = fmt.Sprintf("Deleted %s; switched to %s (%s)", result.DeletedVersion, result.ActiveAfter.Version, result.ActiveAfter.Scope)
+		case result.WasActive && result.ActiveAfter.Version == "":
+			m.status = fmt.Sprintf("Deleted %s; no installed versions remain", result.DeletedVersion)
+		default:
+			m.status = fmt.Sprintf("Deleted %s", result.DeletedVersion)
+		}
+
+		if result.ToolSyncWarning != "" {
+			m.lastError = "Tool sync warning: " + result.ToolSyncWarning
+		}
+
+		cmds = append(cmds, m.loadLocalCmd(), m.loadCurrentCmd())
 	}
 
 	return m, tea.Batch(cmds...)
@@ -262,7 +318,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if !m.hasRemoteHit {
 				m.busy = true
 				m.status = "Loading remote versions..."
-				return m, m.loadRemoteCmd()
+				return m, tea.Batch(m.spinner.Tick, m.loadRemoteCmd())
 			}
 		} else {
 			m.mode = modeLocal
@@ -281,12 +337,22 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.status = fmt.Sprintf("Scope set to %s", m.scope)
 	case "r":
 		m.busy = true
+		m.status = "Refreshing information..."
 		if m.mode == modeLocal {
-			m.status = "Refreshing local versions..."
-			return m, tea.Batch(m.loadLocalCmd(), m.loadCurrentCmd())
+			return m, tea.Batch(m.spinner.Tick, m.loadLocalCmd(), m.loadCurrentCmd())
 		}
-		m.status = "Refreshing remote versions..."
-		return m, m.loadRemoteCmd()
+		return m, tea.Batch(m.spinner.Tick, m.loadRemoteCmd())
+	case "x", "X":
+		if m.mode != modeLocal {
+			m.status = "Delete works in local mode only"
+			return m, nil
+		}
+		if len(current) == 0 {
+			m.status = "No installed version selected"
+			return m, nil
+		}
+		version := current[m.cursor]
+		return m.startDelete(version)
 	case "i":
 		if m.mode != modeRemote {
 			m.status = "Switch to remote mode (Tab) to install"
@@ -297,18 +363,14 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		version := current[m.cursor]
-		m.busy = true
-		m.status = fmt.Sprintf("Installing %s...", version)
-		return m, m.installCmd(version)
+		return m.startInstall(version)
 	case "enter":
 		if len(current) == 0 {
 			m.status = "No version selected"
 			return m, nil
 		}
 		version := current[m.cursor]
-		m.busy = true
-		m.status = fmt.Sprintf("Switching to %s (%s)...", version, m.scope)
-		return m, m.useCmd(version)
+		return m.startUse(version)
 	}
 
 	return m, nil
@@ -338,26 +400,142 @@ func (m model) loadCurrentCmd() tea.Cmd {
 	}
 }
 
-func (m model) installCmd(version string) tea.Cmd {
-	return func() tea.Msg {
-		installed, err := m.svc.Install(m.ctx, version)
-		return installDoneMsg{version: installed, err: err}
-	}
+func (m model) startInstall(version string) (tea.Model, tea.Cmd) {
+	progressCh := make(chan progress.Event, 128)
+	doneCh := make(chan tea.Msg, 1)
+
+	go func() {
+		reporter := func(event progress.Event) {
+			select {
+			case progressCh <- event:
+			default:
+			}
+		}
+
+		installed, err := m.svc.InstallWithProgress(m.ctx, version, reporter)
+		close(progressCh)
+		doneCh <- installDoneMsg{version: installed, err: err}
+		close(doneCh)
+	}()
+
+	m.busy = true
+	m.lastError = ""
+	m.status = fmt.Sprintf("Starting installation for %s...", version)
+	m.progressCh = progressCh
+	m.doneCh = doneCh
+
+	return m, tea.Batch(m.spinner.Tick, m.waitAsyncCmd())
 }
 
-func (m model) useCmd(version string) tea.Cmd {
-	return func() tea.Msg {
-		selected, lintVersion, err := m.svc.Use(m.ctx, version, m.scope, m.cwd)
+func (m model) startUse(version string) (tea.Model, tea.Cmd) {
+	progressCh := make(chan progress.Event, 128)
+	doneCh := make(chan tea.Msg, 1)
+
+	go func() {
+		reporter := func(event progress.Event) {
+			select {
+			case progressCh <- event:
+			default:
+			}
+		}
+
+		selected, lintVersion, err := m.svc.UseWithProgress(m.ctx, version, m.scope, m.cwd, reporter)
 		if err != nil {
-			return useDoneMsg{err: err}
+			close(progressCh)
+			doneCh <- useDoneMsg{err: err}
+			close(doneCh)
+			return
 		}
 
 		active, err := m.svc.Current(m.cwd)
+		close(progressCh)
 		if err != nil {
-			return useDoneMsg{version: selected, lintVersion: lintVersion, err: err}
+			doneCh <- useDoneMsg{version: selected, lintVersion: lintVersion, err: err}
+			close(doneCh)
+			return
 		}
 
-		return useDoneMsg{version: selected, lintVersion: lintVersion, active: active}
+		doneCh <- useDoneMsg{version: selected, lintVersion: lintVersion, active: active}
+		close(doneCh)
+	}()
+
+	m.busy = true
+	m.lastError = ""
+	m.status = fmt.Sprintf("Switching to %s (%s)...", version, m.scope)
+	m.progressCh = progressCh
+	m.doneCh = doneCh
+
+	return m, tea.Batch(m.spinner.Tick, m.waitAsyncCmd())
+}
+
+func (m model) startDelete(version string) (tea.Model, tea.Cmd) {
+	progressCh := make(chan progress.Event, 128)
+	doneCh := make(chan tea.Msg, 1)
+
+	go func() {
+		reporter := func(event progress.Event) {
+			select {
+			case progressCh <- event:
+			default:
+			}
+		}
+
+		result, err := m.svc.DeleteInstalledWithProgress(m.ctx, m.cwd, version, reporter)
+		close(progressCh)
+		doneCh <- deleteDoneMsg{result: result, err: err}
+		close(doneCh)
+	}()
+
+	m.busy = true
+	m.lastError = ""
+	m.status = fmt.Sprintf("Deleting %s...", version)
+	m.progressCh = progressCh
+	m.doneCh = doneCh
+
+	return m, tea.Batch(m.spinner.Tick, m.waitAsyncCmd())
+}
+
+func (m model) waitAsyncCmd() tea.Cmd {
+	progressCh := m.progressCh
+	doneCh := m.doneCh
+
+	return func() tea.Msg {
+		if progressCh == nil && doneCh == nil {
+			return asyncClosedMsg{}
+		}
+
+		if progressCh == nil {
+			msg, ok := <-doneCh
+			if !ok {
+				return asyncClosedMsg{}
+			}
+			return msg
+		}
+
+		if doneCh == nil {
+			event, ok := <-progressCh
+			if !ok {
+				return asyncClosedMsg{}
+			}
+			return progressMsg{event: event}
+		}
+
+		select {
+		case msg, ok := <-doneCh:
+			if !ok {
+				return asyncClosedMsg{}
+			}
+			return msg
+		case event, ok := <-progressCh:
+			if !ok {
+				msg, ok := <-doneCh
+				if !ok {
+					return asyncClosedMsg{}
+				}
+				return msg
+			}
+			return progressMsg{event: event}
+		}
 	}
 }
 
@@ -383,7 +561,7 @@ func (m model) View() string {
 
 	header := titleStyle.Render("Go Switcher")
 	header += "\n"
-	header += subtleStyle.Render("Tab: local/remote  Enter: use  i: install(remote)  s: scope  j/k or arrows: move  PgUp/PgDn: jump  q: quit")
+	header += subtleStyle.Render("Tab: local/remote  Enter: use  i: install(remote)  X: delete(local)  s: scope  r: refresh  j/k or arrows: move  PgUp/PgDn: jump  q: quit")
 
 	active := "none"
 	if m.activeVersion != "" {

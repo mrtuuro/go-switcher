@@ -2,12 +2,18 @@ APP_NAME := switcher
 BIN_DIR := ./bin
 BIN_PATH := $(BIN_DIR)/$(APP_NAME)
 MAIN_PKG := ./cmd/switcher
+GO ?= go
+GOTOOLCHAIN ?= auto
+GO_CMD := GOTOOLCHAIN=$(GOTOOLCHAIN) $(GO)
 
-.PHONY: build install run test test-one lint fmt clean
+.PHONY: bootstrap build install run test test-one lint fmt clean
+
+bootstrap:
+	@./scripts/install.sh
 
 build:
 	@mkdir -p $(BIN_DIR)
-	@go build -o $(BIN_PATH) $(MAIN_PKG)
+	@$(GO_CMD) build -o $(BIN_PATH) $(MAIN_PKG)
 
 install: build
 	@mkdir -p "$(HOME)/.switcher/bin"
@@ -19,14 +25,14 @@ run: build
 	@$(BIN_PATH)
 
 test:
-	@go test -v ./...
+	@$(GO_CMD) test -v ./...
 
 test-one:
 	@if [ -z "$(PKG)" ] || [ -z "$(TEST)" ]; then \
 		echo "Usage: make test-one PKG=./internal/switcher TEST='^TestResolveActiveVersion$$'"; \
 		exit 1; \
 	fi
-	@go test -v $(PKG) -run $(TEST)
+	@$(GO_CMD) test -v $(PKG) -run $(TEST)
 
 lint:
 	@golangci-lint run ./...

@@ -111,20 +111,76 @@ func SetActiveVersion(version string, scope Scope, cwd string, paths Paths) erro
 	switch scope {
 	case ScopeLocal:
 		filePath := filepath.Join(cwd, LocalVersionFile)
-		if err := writeFileAtomically(filePath, []byte(normalized+"\n"), 0o644); err != nil {
-			return fmt.Errorf("write local version file %s: %w", filePath, err)
-		}
-		return nil
+		return SetLocalVersionAtPath(filePath, normalized)
 	case ScopeGlobal:
-		cfg, err := ReadConfig(paths)
-		if err != nil {
-			return err
-		}
-		cfg.GlobalVersion = normalized
-		return WriteConfig(paths, cfg)
+		return SetGlobalVersion(paths, normalized)
 	default:
 		return fmt.Errorf("unsupported scope %q", scope)
 	}
+}
+
+func SetLocalVersionAtPath(filePath string, version string) error {
+	normalized, err := versionutil.NormalizeGoVersion(version)
+	if err != nil {
+		return err
+	}
+
+	if err := writeFileAtomically(filePath, []byte(normalized+"\n"), 0o644); err != nil {
+		return fmt.Errorf("write local version file %s: %w", filePath, err)
+	}
+
+	return nil
+}
+
+func ClearLocalVersionAtPath(filePath string) error {
+	if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove local version file %s: %w", filePath, err)
+	}
+	return nil
+}
+
+func SetGlobalVersion(paths Paths, version string) error {
+	normalized, err := versionutil.NormalizeGoVersion(version)
+	if err != nil {
+		return err
+	}
+
+	cfg, err := ReadConfig(paths)
+	if err != nil {
+		return err
+	}
+	cfg.GlobalVersion = normalized
+	return WriteConfig(paths, cfg)
+}
+
+func ClearGlobalVersion(paths Paths) error {
+	cfg, err := ReadConfig(paths)
+	if err != nil {
+		return err
+	}
+	cfg.GlobalVersion = ""
+	return WriteConfig(paths, cfg)
+}
+
+func DeleteInstalledVersion(paths Paths, version string) error {
+	normalized, err := versionutil.NormalizeGoVersion(version)
+	if err != nil {
+		return err
+	}
+
+	targetDir := ToolchainDir(paths, normalized)
+	if _, err := os.Stat(targetDir); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("toolchain %s is not installed", normalized)
+		}
+		return fmt.Errorf("stat toolchain directory %s: %w", targetDir, err)
+	}
+
+	if err := os.RemoveAll(targetDir); err != nil {
+		return fmt.Errorf("remove toolchain %s: %w", normalized, err)
+	}
+
+	return nil
 }
 
 func GlobalVersion(paths Paths) (string, bool, error) {

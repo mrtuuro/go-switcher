@@ -13,8 +13,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mrtuuro/go-switcher/internal/progress"
 	"github.com/mrtuuro/go-switcher/internal/switcher"
 )
+
+type EnsureOptions struct {
+	Reporter progress.Reporter
+}
 
 func GolangCILintBinaryPath(paths switcher.Paths, lintVersion string) string {
 	platformDir := runtime.GOOS + "-" + runtime.GOARCH
@@ -22,6 +27,10 @@ func GolangCILintBinaryPath(paths switcher.Paths, lintVersion string) string {
 }
 
 func EnsureForGoVersion(ctx context.Context, paths switcher.Paths, cfg *switcher.Config, goVersion string) (string, error) {
+	return EnsureForGoVersionWithOptions(ctx, paths, cfg, goVersion, EnsureOptions{})
+}
+
+func EnsureForGoVersionWithOptions(ctx context.Context, paths switcher.Paths, cfg *switcher.Config, goVersion string, opts EnsureOptions) (string, error) {
 	if cfg.GolangCILintByGo == nil {
 		cfg.GolangCILintByGo = map[string]string{}
 	}
@@ -34,13 +43,16 @@ func EnsureForGoVersion(ctx context.Context, paths switcher.Paths, cfg *switcher
 
 	binaryPath := GolangCILintBinaryPath(paths, lintVersion)
 	if _, err := os.Stat(binaryPath); err == nil {
+		progress.Emit(opts.Reporter, "lint-install", fmt.Sprintf("Using cached golangci-lint %s", lintVersion), 0, 0)
 		return lintVersion, nil
 	}
 
-	if err := installGolangCILint(ctx, paths, lintVersion); err != nil {
+	progress.Emit(opts.Reporter, "lint-install", fmt.Sprintf("Installing golangci-lint %s", lintVersion), 0, 0)
+	if err := installGolangCILint(ctx, paths, lintVersion, opts.Reporter); err != nil {
 		return "", err
 	}
 
+	progress.Emit(opts.Reporter, "lint-install", fmt.Sprintf("Installed golangci-lint %s", lintVersion), 0, 0)
 	return lintVersion, nil
 }
 
@@ -58,7 +70,7 @@ func ResolveBinary(paths switcher.Paths, cfg switcher.Config, goVersion string) 
 	return binaryPath, lintVersion, nil
 }
 
-func installGolangCILint(ctx context.Context, paths switcher.Paths, lintVersion string) error {
+func installGolangCILint(ctx context.Context, paths switcher.Paths, lintVersion string, reporter progress.Reporter) error {
 	if err := switcher.EnsureLayout(paths); err != nil {
 		return err
 	}
@@ -71,12 +83,15 @@ func installGolangCILint(ctx context.Context, paths switcher.Paths, lintVersion 
 		if !os.IsNotExist(err) {
 			return fmt.Errorf("stat cache file %s: %w", cachePath, err)
 		}
-		if err := downloadToFile(ctx, archiveURL, cachePath); err != nil {
+		if err := downloadToFile(ctx, archiveURL, cachePath, reporter, "lint-download", archiveName); err != nil {
 			return fmt.Errorf("download golangci-lint archive: %w", err)
 		}
+	} else {
+		progress.Emit(reporter, "lint-download", fmt.Sprintf("Using cached archive %s", archiveName), 0, 0)
 	}
 
 	binaryPath := GolangCILintBinaryPath(paths, lintVersion)
+	progress.Emit(reporter, "lint-extract", fmt.Sprintf("Extracting %s", archiveName), 0, 0)
 	if err := extractBinaryFromArchive(cachePath, binaryPath, "golangci-lint"); err != nil {
 		return fmt.Errorf("install golangci-lint %s: %w", lintVersion, err)
 	}
@@ -84,7 +99,7 @@ func installGolangCILint(ctx context.Context, paths switcher.Paths, lintVersion 
 	return nil
 }
 
-func downloadToFile(ctx context.Context, url string, destination string) error {
+func downloadToFile(ctx context.Context, url string, destination string, reporter progress.Reporter, stage string, label string) error {
 	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
 		return fmt.Errorf("create destination directory: %w", err)
 	}
@@ -121,10 +136,21 @@ func downloadToFile(ctx context.Context, url string, destination string) error {
 		return fmt.Errorf("unexpected status code %d", resp.StatusCode)
 	}
 
-	if _, err := io.Copy(tmp, resp.Body); err != nil {
+	total := resp.ContentLength
+	progress.Emit(reporter, stage, fmt.Sprintf("Downloading %s", label), 0, total)
+
+	progressWriter := &downloadProgressWriter{
+		reporter: reporter,
+		stage:    stage,
+		label:    label,
+		total:    total,
+	}
+
+	if _, err := io.Copy(tmp, io.TeeReader(resp.Body, progressWriter)); err != nil {
 		cleanup()
 		return fmt.Errorf("write response: %w", err)
 	}
+	progressWriter.emit(true)
 
 	if err := tmp.Close(); err != nil {
 		cleanup()
@@ -137,6 +163,34 @@ func downloadToFile(ctx context.Context, url string, destination string) error {
 	}
 
 	return nil
+}
+
+type downloadProgressWriter struct {
+	reporter progress.Reporter
+	stage    string
+	label    string
+	total    int64
+	current  int64
+	lastEmit time.Time
+}
+
+func (w *downloadProgressWriter) Write(p []byte) (int, error) {
+	w.current += int64(len(p))
+	w.emit(false)
+	return len(p), nil
+}
+
+func (w *downloadProgressWriter) emit(force bool) {
+	if w.reporter == nil {
+		return
+	}
+	if !force && time.Since(w.lastEmit) < 250*time.Millisecond {
+		return
+	}
+
+	transfer := progress.FormatTransfer(w.current, w.total)
+	progress.Emit(w.reporter, w.stage, fmt.Sprintf("Downloading %s %s", w.label, transfer), w.current, w.total)
+	w.lastEmit = time.Now()
 }
 
 func extractBinaryFromArchive(archivePath string, destination string, binaryName string) error {

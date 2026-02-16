@@ -22,6 +22,8 @@ This file defines build/test commands, style conventions, and safety rules.
 - `internal/tools` companion tool version mapping and install
 - `internal/tui` Charm/Bubble Tea terminal UI
 - `internal/versionutil` Go and dotted version comparison helpers
+- `internal/progress` progress events and transfer formatting
+- `scripts/install.sh` no-Go bootstrap installer
 
 If the codebase changes, update this file to match reality.
 
@@ -34,12 +36,16 @@ If the codebase changes, update this file to match reality.
 
 ## Build and Run
 
+- Install from release binary (no local Go required): `./scripts/install.sh`
 - Build binary: `make build`
 - Install binary for terminal use: `make install`
+- Bootstrap install from repo clone: `make bootstrap`
 - Build output: `./bin/switcher`
 - Run binary: `make run`
 - Run from source: `go run ./cmd/switcher`
 - Show command help: `./bin/switcher help`
+
+Source build needs Go 1.23+ (Charm dependencies). `make` uses `GOTOOLCHAIN=auto`.
 
 ## Test Commands
 

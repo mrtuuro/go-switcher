@@ -11,20 +11,49 @@ It installs official Go releases, supports global and project-local version sele
 - Sync `golangci-lint` to a compatible version for the selected Go toolchain.
 - Launch an interactive terminal UI built with Charm libraries.
 
+## Demo
+
+Quick demo video:
+
+- [Watch demo (`go-switcher-demo.mov`)](./assets/go-switcher-demo.mov)
+
+If your Markdown viewer supports inline HTML video, this also works:
+
+<video src="./assets/go-switcher-demo.mov" controls muted playsinline width="860"></video>
+
 ## Installation
 
-### Option 1: Install with `go install` (recommended)
+### Option 1: Install without Go (recommended)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mrtuuro/go-switcher/main/scripts/install.sh | sh
+```
+
+This downloads the latest release binary for your OS/arch and installs it to
+`~/.switcher/bin/switcher`.
+
+Pin a specific version if needed:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mrtuuro/go-switcher/main/scripts/install.sh | SWITCHER_VERSION=v0.1.0 sh
+```
+
+### Option 2: Install with `go install`
 
 ```bash
 go install github.com/mrtuuro/go-switcher/cmd/switcher@latest
 ```
 
-### Option 2: Download a release binary
+### Option 3: Download a release binary manually
 
 Download the archive for your OS/arch from GitHub Releases, then place the
 `switcher` binary in a directory on your `PATH`.
 
-### Option 3: Build from source
+### Option 4: Build from source
+
+Building from source requires Go 1.23+ because of Charm dependencies.
+`make` targets use `GOTOOLCHAIN=auto`, so Go 1.21+ can auto-download a newer
+toolchain when allowed.
 
 ```bash
 make build
@@ -36,6 +65,12 @@ Install as a terminal command and bootstrap shims:
 
 ```bash
 make install
+```
+
+Or from a cloned repo without building:
+
+```bash
+make bootstrap
 ```
 
 Then add the switcher shim directory to PATH:
@@ -67,6 +102,19 @@ switcher tools sync
 switcher tools sync --scope local
 switcher tui
 ```
+
+### TUI controls
+
+- `Tab`: switch between local and remote lists
+- `Enter`: use selected version
+- `i`: install selected remote version
+- `X`: delete selected local installed version
+- `r`: refresh current list information
+- `s`: toggle scope (`global`/`local`)
+- `q`: quit
+
+If you delete the currently active installed version, switcher automatically
+sets the active version to the newest remaining installed one.
 
 ## Scope resolution
 
@@ -109,3 +157,4 @@ git push origin v0.1.0
 
 - `switcher` currently targets macOS and Linux archives from `go.dev/dl`.
 - If `golangci-lint` is missing for the active Go version, run `switcher tools sync`.
+- If your active Go is old and source build fails, install from release script instead.
