@@ -56,7 +56,7 @@ brews:
     license: MIT
     commit_author:
       name: go-switcher-bot
-      email: 183410257+mrtuuro@users.noreply.github.com
+      email: 72571144+mrtuuro@users.noreply.github.com
     install: |
       bin.install "switcher"
     test: |
