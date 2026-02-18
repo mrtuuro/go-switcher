@@ -11,9 +11,6 @@ It installs official Go releases, supports global and project-local version sele
 - Sync `golangci-lint` to a compatible version for the selected Go toolchain.
 - Launch an interactive terminal UI built with Charm libraries.
 
-## Demo
-
-Quick demo (auto-playing GIF inside the repository):
 
 ![go-switcher demo](./assets/go-switcher-demo.gif)
 
